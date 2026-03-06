@@ -4,11 +4,9 @@ on:
   workflow_dispatch: # allows manual triggering
   push:
     branches:
-      - master
+      - main
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -29,8 +27,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build.yml',
-      '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -742,12 +738,6 @@ jobs:
             -DCMAKE_CXX_COMPILER=icpx \
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
-
-  build-linux-cross:
-    uses: ./.github/workflows/build-linux-cross.yml
-
-  build-cmake-pkg:
-    uses: ./.github/workflows/build-cmake-pkg.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest

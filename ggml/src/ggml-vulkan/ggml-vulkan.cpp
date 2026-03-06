@@ -3417,6 +3417,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
             required_subgroup_size = get_subgroup_size(name, device->architecture);
         }
 
+#ifdef GGML_VULKAN_BUILD_ADRENO_SHADERS
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            const void * adreno_data = nullptr;
+            uint64_t adreno_len = 0;
+            if (ggml_vk_get_adreno_variant(spv_data, &adreno_len, &adreno_data)) {
+                spv_data = adreno_data;
+                spv_size = adreno_len;
+            }
+        }
+#endif
+
         vk_pipeline *ptr = &base_pipeline;
 
         int num_pipelines = 1;

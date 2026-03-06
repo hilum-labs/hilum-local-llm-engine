@@ -95,6 +95,12 @@ if (Vulkan_FOUND)
         target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vma)
     endif()
 
+    option(GGML_VULKAN_BUILD_ADRENO_SHADERS "Build Adreno-optimized Vulkan shader variants" OFF)
+    if (GGML_VULKAN_BUILD_ADRENO_SHADERS)
+        target_compile_definitions(ggml-vulkan PRIVATE GGML_VULKAN_BUILD_ADRENO_SHADERS)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_BUILD_ADRENO_SHADERS=ON)
+    endif()
+
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
     # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
     if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
