@@ -192,6 +192,16 @@ endif()
 add_subdirectory(src)
 
 #
+# hilum shared C API (libhilum)
+#
+
+option(HILUM_BUILD_LIB "hilum: build the libhilum shared C API" OFF)
+
+if (HILUM_BUILD_LIB)
+    add_subdirectory(hilum)
+endif()
+
+#
 # utils, programs, examples and tests
 #
 
