@@ -287,7 +287,7 @@ HILUM_API const char * hilum_backend_version(void) {
     return "hilum-llm v1.0.0 (hilum-local-llm-engine)";
 }
 
-HILUM_API int32_t hilum_api_version(void) {
+HILUM_API uint32_t hilum_api_version(void) {
     return HILUM_API_VERSION;
 }
 

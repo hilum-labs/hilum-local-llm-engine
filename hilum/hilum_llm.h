@@ -17,7 +17,22 @@
 #ifndef HILUM_LLM_H
 #define HILUM_LLM_H
 
-#define HILUM_API_VERSION 1
+/*
+ * API/ABI versioning
+ *
+ * ABI contract:
+ * - Within a major version, changes are additive-only.
+ * - Existing exported signatures and struct field ordering are stable.
+ * - New struct fields are appended.
+ *
+ * Runtime wrappers should compare compiled major vs runtime major via
+ * hilum_api_version().
+ */
+#define HILUM_API_VERSION_MAJOR 1
+#define HILUM_API_VERSION_MINOR 0
+#define HILUM_API_VERSION_PATCH 0
+#define HILUM_API_VERSION \
+    ((uint32_t)(((HILUM_API_VERSION_MAJOR) << 16) | ((HILUM_API_VERSION_MINOR) << 8) | (HILUM_API_VERSION_PATCH)))
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -36,6 +51,22 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * Thread safety contract:
+ *
+ * - A hilum_model is immutable after load and may be shared across threads.
+ *   Multiple contexts may use the same model concurrently.
+ *
+ * - A hilum_context / hilum_emb_ctx is NOT thread-safe. Use one context per
+ *   thread and do not concurrently call generate/embed APIs on the same handle.
+ *
+ * - hilum_cancel() / hilum_cancel_clear() are thread-safe and may be called
+ *   from any thread while another thread is generating on that context.
+ *
+ * - Global query helpers (hilum_api_version, hilum_backend_info,
+ *   hilum_backend_version, hilum_last_error, hilum_error_str) are thread-safe.
+ */
 
 /* ── Opaque handles ────────────────────────────────────────────────────────── */
 
@@ -73,7 +104,7 @@ HILUM_API const char * hilum_last_error(void);
 
 HILUM_API const char * hilum_backend_info(void);
 HILUM_API const char * hilum_backend_version(void);
-HILUM_API int32_t      hilum_api_version(void);
+HILUM_API uint32_t     hilum_api_version(void);
 
 /* ── Model lifecycle ───────────────────────────────────────────────────────── */
 
