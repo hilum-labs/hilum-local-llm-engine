@@ -8,6 +8,28 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
+# The C++ header vulkan.hpp is not shipped with the Android NDK or some minimal
+# Vulkan SDK installs.  When it is missing, fetch the official Vulkan-Headers
+# from Khronos so the build is fully self-contained (plug-and-play for consumers).
+if (NOT EXISTS "${Vulkan_INCLUDE_DIRS}/vulkan/vulkan.hpp")
+    message(STATUS "vulkan.hpp not found in ${Vulkan_INCLUDE_DIRS}, fetching Vulkan-Headers")
+    include(FetchContent)
+    FetchContent_Declare(
+        VulkanHeaders
+        URL      https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.275.tar.gz
+        # URL_HASH to be pinned after verifying the archive checksum
+    )
+    # Use Populate (not MakeAvailable) — we only need the headers, not the
+    # Vulkan-Headers CMake targets which fail under Android cross-compilation.
+    FetchContent_GetProperties(VulkanHeaders)
+    if (NOT vulkanheaders_POPULATED)
+        FetchContent_Populate(VulkanHeaders)
+    endif()
+    # Prepend so the fetched headers are found before any partial system headers.
+    include_directories(BEFORE SYSTEM "${vulkanheaders_SOURCE_DIR}/include")
+    set(Vulkan_INCLUDE_DIRS "${vulkanheaders_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -156,6 +178,17 @@ if (Vulkan_FOUND)
     if (CMAKE_CROSSCOMPILING)
         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+    endif()
+
+    # Forward the build tool (e.g. ninja) so the host sub-build can find it
+    # even when it's bundled inside the Android SDK and not on the system PATH.
+    get_filename_component(_cmake_bin_dir "${CMAKE_COMMAND}" DIRECTORY)
+    find_program(_vulkan_gen_make_program ninja PATHS "${_cmake_bin_dir}" NO_DEFAULT_PATH)
+    if (NOT _vulkan_gen_make_program)
+        set(_vulkan_gen_make_program "${CMAKE_MAKE_PROGRAM}")
+    endif()
+    if (_vulkan_gen_make_program)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_MAKE_PROGRAM=${_vulkan_gen_make_program})
     endif()
 
     ExternalProject_Add(

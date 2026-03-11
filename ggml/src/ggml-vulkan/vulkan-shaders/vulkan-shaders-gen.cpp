@@ -1234,27 +1234,31 @@ void write_output_files() {
 
     if (!adreno_bases.empty()) {
         // Declaration
-        hdr << "bool ggml_vk_get_adreno_variant(const void * base_data, uint64_t * len_out, const void ** data_out);\n\n";
+        hdr << "#include <unordered_map>\n";
+        hdr << "#include <utility>\n";
         hdr << "using ggml_vk_adreno_map_t = std::unordered_map<const void*, std::pair<const void*, uint64_t>>;\n\n";
 
-        // Map generation
-        src << "#include <unordered_map>\n\n";
-        src << "static const ggml_vk_adreno_map_t ggml_vk_adreno_ptr_map = {\n";
+        // Map + lookup function in the header as inline to avoid duplicate symbols
+        // when multiple .comp.cpp translation units include this header.
+        hdr << "static inline const ggml_vk_adreno_map_t & ggml_vk_adreno_ptr_map() {\n";
+        hdr << "    static const ggml_vk_adreno_map_t m = {\n";
         for (size_t i = 0; i < adreno_bases.size(); ++i) {
             const std::string &base = adreno_bases[i];
-            src << "    { " << base << "_data, { adreno_" << base << "_data, adreno_" << base << "_len } },\n";
+            hdr << "        { " << base << "_data, { adreno_" << base << "_data, adreno_" << base << "_len } },\n";
         }
-        src << "};\n\n";
+        hdr << "    };\n";
+        hdr << "    return m;\n";
+        hdr << "}\n\n";
 
-        // Lookup function implementation
-        src << "bool ggml_vk_get_adreno_variant(const void * base_data, uint64_t * len_out, const void ** data_out) {\n";
-        src << "    if (!base_data || !len_out || !data_out) return false;\n";
-        src << "    auto it = ggml_vk_adreno_ptr_map.find(base_data);\n";
-        src << "    if (it == ggml_vk_adreno_ptr_map.end()) return false;\n";
-        src << "    *len_out = it->second.second;\n";
-        src << "    *data_out = it->second.first;\n";
-        src << "    return true;\n";
-        src << "}\n\n";
+        hdr << "static inline bool ggml_vk_get_adreno_variant(const void * base_data, uint64_t * len_out, const void ** data_out) {\n";
+        hdr << "    if (!base_data || !len_out || !data_out) return false;\n";
+        hdr << "    const auto & m = ggml_vk_adreno_ptr_map();\n";
+        hdr << "    auto it = m.find(base_data);\n";
+        hdr << "    if (it == m.end()) return false;\n";
+        hdr << "    *len_out = it->second.second;\n";
+        hdr << "    *data_out = it->second.first;\n";
+        hdr << "    return true;\n";
+        hdr << "}\n\n";
     }
 
     if (input_filepath == "") {

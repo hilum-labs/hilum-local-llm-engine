@@ -582,19 +582,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
         endif()
 
-        # TODO: Use FetchContent_MakeAvailable with EXCLUDE_FROM_ALL after bumping minimum CMake version to 3.28+
-        # Using FetchContent_Populate instead to avoid EXCLUDE_FROM_ALL which requires CMake 3.28
         FetchContent_Declare(KleidiAI_Download
-            ${KLEIDIAI_FETCH_ARGS})
+            ${KLEIDIAI_FETCH_ARGS}
+            EXCLUDE_FROM_ALL)
 
-        FetchContent_GetProperties(KleidiAI_Download
-            SOURCE_DIR  KLEIDIAI_SRC
-            POPULATED   KLEIDIAI_POPULATED)
+        FetchContent_MakeAvailable(KleidiAI_Download)
 
-        if (NOT KLEIDIAI_POPULATED)
-            FetchContent_Populate(KleidiAI_Download)
-            FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
-        endif()
+        FetchContent_GetProperties(KleidiAI_Download SOURCE_DIR KLEIDIAI_SRC)
 
         add_compile_definitions(GGML_USE_CPU_KLEIDIAI)
 
