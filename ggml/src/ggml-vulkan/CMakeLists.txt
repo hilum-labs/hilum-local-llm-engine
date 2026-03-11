@@ -114,7 +114,7 @@ if (Vulkan_FOUND)
     option(GGML_VULKAN_VMA "Use Vulkan Memory Allocator for buffer management" OFF)
     if (GGML_VULKAN_VMA)
         target_compile_definitions(ggml-vulkan PRIVATE GGML_VULKAN_VMA)
-        target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vma)
+        target_include_directories(ggml-vulkan SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vma)
     endif()
 
     option(GGML_VULKAN_BUILD_ADRENO_SHADERS "Build Adreno-optimized Vulkan shader variants" OFF)
