@@ -54,7 +54,7 @@ Since template output is a plain string, distinguishing legitimate special token
 
 ### Solution
 
-The llama.cpp Jinja engine introduces `jinja::string` (see `jinja/string.h`), which wraps `std::string` and preserves origin metadata.
+The llama.cpp Jinja engine introduces `jinja::string` (see `jinja/jinja_string.h`), which wraps `std::string` and preserves origin metadata.
 
 **Implementation:**
 - Strings originating from user input are marked with `is_input = true`

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "string.h"
+#include "jinja_string.h"
 #include "utils.h"
 
 #include <algorithm>
