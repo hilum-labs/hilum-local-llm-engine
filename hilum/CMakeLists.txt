@@ -23,7 +23,7 @@ target_include_directories(${TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../common
     ${CMAKE_CURRENT_SOURCE_DIR}/../vendor
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/mtmd
+    ${CMAKE_CURRENT_SOURCE_DIR}/../mtmd
 )
 
 target_compile_features(${TARGET} PUBLIC cxx_std_17)
@@ -41,7 +41,7 @@ if (NOT TARGET mtmd)
         set(LLAMA_INSTALL_VERSION "0.0.0")
     endif()
     add_subdirectory(
-        ${CMAKE_CURRENT_SOURCE_DIR}/../tools/mtmd
+        ${CMAKE_CURRENT_SOURCE_DIR}/../mtmd
         ${CMAKE_CURRENT_BINARY_DIR}/mtmd
         EXCLUDE_FROM_ALL
     )
