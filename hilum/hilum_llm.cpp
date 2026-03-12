@@ -32,9 +32,9 @@
 #endif
 
 #include "llama.h"
-#include "mtmd.h"
-#include "mtmd-helper.h"
-#include "json-schema-to-grammar.h"
+#include "../mtmd/mtmd.h"
+#include "../mtmd/mtmd-helper.h"
+#include "../common/json-schema-to-grammar.h"
 #include <nlohmann/json.hpp>
 
 /* ── Backend initialization (once) ─────────────────────────────────────────── */
