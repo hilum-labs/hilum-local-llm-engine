@@ -234,9 +234,41 @@ typedef struct {
     void       * progress_user_data;
     const char * const * stop_sequences;  /* NULL-terminated array, or NULL */
     int32_t      n_stop_sequences;        /* 0 = none */
+    int32_t      min_keep;                /* default: 0 */
+    float        min_p;                   /* default: 0.0 = disabled */
+    float        typical_p;               /* default: 1.0 = disabled */
+    float        top_n_sigma;             /* default: -1.0 = disabled */
+    float        xtc_probability;         /* default: 0.0 = disabled */
+    float        xtc_threshold;           /* default: 0.1 */
+    float        dry_multiplier;          /* default: 0.0 = disabled */
+    float        dry_base;                /* default: 1.75 */
+    int32_t      dry_allowed_length;      /* default: 2 */
+    int32_t      dry_penalty_last_n;      /* default: -1 = context */
+    const char * const * dry_sequence_breakers; /* NULL = defaults */
+    int32_t      n_dry_sequence_breakers; /* 0 = defaults */
+    float        adaptive_p_target;       /* default: -1.0 = disabled */
+    float        adaptive_p_decay;        /* default: 0.9 */
+    int32_t      mirostat;                /* 0 = disabled, 1/2 enabled */
+    float        mirostat_tau;            /* default: 5.0 */
+    float        mirostat_eta;            /* default: 0.1 */
+    float        dynatemp_range;          /* default: 0.0 = disabled */
+    float        dynatemp_exponent;       /* default: 1.0 */
+    bool         grammar_lazy;            /* default: false */
 } hilum_gen_params;
 
 HILUM_API hilum_gen_params hilum_gen_default_params(void);
+
+typedef enum {
+    HILUM_FIT_SUCCESS = 0,
+    HILUM_FIT_FAILURE = 1,
+    HILUM_FIT_ERROR   = 2,
+} hilum_fit_status;
+
+HILUM_API hilum_fit_status hilum_fit_params(
+    const char           * model_path,
+    hilum_model_params   * model_params,
+    hilum_context_params * context_params,
+    uint32_t               n_ctx_min);
 
 /* ── Text inference ────────────────────────────────────────────────────────── */
 

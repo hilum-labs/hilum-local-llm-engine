@@ -17,7 +17,7 @@ A maintained fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) optimize
 
 > If you're looking to **use** the engine for inference, head to the package READMEs above. This README covers the engine internals, build process, and our changes from upstream.
 
-We stay in sync with upstream llama.cpp and add mobile-specific optimizations on top. Any GGUF model that works with llama.cpp works with this engine.
+We manually forward-port upstream llama.cpp changes and add mobile-specific optimizations on top. The goal is broad GGUF compatibility, but parity is maintained through targeted subsystem ports and validation rather than by fast-forward merging upstream history.
 
 ## Building
 
@@ -32,6 +32,25 @@ cmake --build build --config Release
 ```
 
 See [docs/build.md](docs/build.md) for full build options and [docs/android.md](docs/android.md) for Android cross-compilation.
+
+To build the Hilum C API and its engine-level smoke tests:
+
+```bash
+cmake -B build \
+  -DHILUM_BUILD_LIB=ON \
+  -DLLAMA_BUILD_TESTS=ON \
+  -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_TOOLS=OFF \
+  -DLLAMA_BUILD_SERVER=OFF \
+  -DGGML_VULKAN=OFF \
+  -DGGML_METAL=OFF \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --config Release --target test-hilum-api test-hilum-runtime
+ctest --test-dir build -R 'test-hilum-(api|runtime)' --output-on-failure
+```
+
+`test-hilum-runtime` uses the tiny GGUF fixture already wired into upstream tests. Positive multimodal and embedding smoke paths can be enabled by setting `HILUM_TEST_MMPROJ`, `HILUM_TEST_IMAGE`, and `HILUM_TEST_EMBED_MODEL`.
 
 ## What we changed
 
@@ -140,7 +159,7 @@ python scripts/tune_device.py \
 
 ## Upstream compatibility
 
-This fork tracks the `master` branch of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Our changes are additive and isolated behind build flags, so merging upstream updates is straightforward.
+This fork follows [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) through manual forward-porting. Our Hilum-specific changes are intentionally kept concentrated in the wrapper and mobile backend layers, but upstream reconciliation is a subsystem-by-subsystem engineering task, not a trivial merge.
 
 - Upstream API changelogs: [libllama](https://github.com/ggml-org/llama.cpp/issues/9289) | [server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
 

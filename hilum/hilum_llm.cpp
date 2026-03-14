@@ -23,6 +23,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <array>
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -32,8 +33,8 @@
 #endif
 
 #include "llama.h"
-#include "../mtmd/mtmd.h"
-#include "../mtmd/mtmd-helper.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 #include "../common/json-schema-to-grammar.h"
 #include <nlohmann/json.hpp>
 
@@ -147,6 +148,25 @@ struct SamplerParams {
     float    frequency_penalty = 0.0f;
     float    presence_penalty  = 0.0f;
     uint32_t seed              = LLAMA_DEFAULT_SEED;
+    int32_t  min_keep          = 0;
+    float    min_p             = 0.0f;
+    float    typical_p         = 1.0f;
+    float    top_n_sigma       = -1.0f;
+    float    xtc_probability   = 0.0f;
+    float    xtc_threshold     = 0.1f;
+    float    dry_multiplier    = 0.0f;
+    float    dry_base          = 1.75f;
+    int32_t  dry_allowed_length = 2;
+    int32_t  dry_penalty_last_n = -1;
+    std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};
+    float    adaptive_p_target = -1.0f;
+    float    adaptive_p_decay  = 0.9f;
+    int32_t  mirostat          = 0;
+    float    mirostat_tau      = 5.0f;
+    float    mirostat_eta      = 0.1f;
+    float    dynatemp_range    = 0.0f;
+    float    dynatemp_exponent = 1.0f;
+    bool     grammar_lazy      = false;
 
     bool operator==(const SamplerParams & o) const {
         return top_k == o.top_k && top_p == o.top_p &&
@@ -154,7 +174,26 @@ struct SamplerParams {
                repeat_penalty == o.repeat_penalty &&
                frequency_penalty == o.frequency_penalty &&
                presence_penalty == o.presence_penalty &&
-               seed == o.seed;
+               seed == o.seed &&
+               min_keep == o.min_keep &&
+               min_p == o.min_p &&
+               typical_p == o.typical_p &&
+               top_n_sigma == o.top_n_sigma &&
+               xtc_probability == o.xtc_probability &&
+               xtc_threshold == o.xtc_threshold &&
+               dry_multiplier == o.dry_multiplier &&
+               dry_base == o.dry_base &&
+               dry_allowed_length == o.dry_allowed_length &&
+               dry_penalty_last_n == o.dry_penalty_last_n &&
+               dry_sequence_breakers == o.dry_sequence_breakers &&
+               adaptive_p_target == o.adaptive_p_target &&
+               adaptive_p_decay == o.adaptive_p_decay &&
+               mirostat == o.mirostat &&
+               mirostat_tau == o.mirostat_tau &&
+               mirostat_eta == o.mirostat_eta &&
+               dynatemp_range == o.dynatemp_range &&
+               dynatemp_exponent == o.dynatemp_exponent &&
+               grammar_lazy == o.grammar_lazy;
     }
 };
 
@@ -171,19 +210,17 @@ static std::mutex g_sampler_cache_mutex;
 static std::unordered_map<llama_context *, SamplerCache> g_sampler_cache;
 
 static llama_sampler * create_sampler(
+    const llama_model * model,
     const llama_vocab * vocab,
-    int32_t top_k, float top_p, float temperature,
-    float repeat_penalty, float frequency_penalty, float presence_penalty,
-    uint32_t seed,
+    const SamplerParams & params,
     const std::string & grammar_str = "",
     const std::string & grammar_root = "root",
     llama_context * cache_ctx = nullptr)
 {
     if (cache_ctx && grammar_str.empty()) {
-        SamplerParams cur{top_k, top_p, temperature, repeat_penalty, frequency_penalty, presence_penalty, seed};
         std::lock_guard<std::mutex> lock(g_sampler_cache_mutex);
         auto it = g_sampler_cache.find(cache_ctx);
-        if (it != g_sampler_cache.end() && it->second.sampler && it->second.params == cur) {
+        if (it != g_sampler_cache.end() && it->second.sampler && it->second.params == params) {
             llama_sampler * cached = it->second.sampler;
             it->second.sampler = nullptr;
             return cached;
@@ -194,15 +231,59 @@ static llama_sampler * create_sampler(
     llama_sampler * smpl = llama_sampler_chain_init(chain_params);
 
     if (!grammar_str.empty()) {
-        llama_sampler * g = llama_sampler_init_grammar(vocab, grammar_str.c_str(), grammar_root.c_str());
+        llama_sampler * g = params.grammar_lazy
+            ? llama_sampler_init_grammar_lazy_patterns(vocab, grammar_str.c_str(), grammar_root.c_str(), nullptr, 0, nullptr, 0)
+            : llama_sampler_init_grammar(vocab, grammar_str.c_str(), grammar_root.c_str());
         if (g) llama_sampler_chain_add(smpl, g);
     }
 
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, frequency_penalty, presence_penalty));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+    std::vector<const char *> dry_breakers;
+    dry_breakers.reserve(params.dry_sequence_breakers.size());
+    for (const auto & breaker : params.dry_sequence_breakers) {
+        dry_breakers.push_back(breaker.c_str());
+    }
+
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, params.repeat_penalty, params.frequency_penalty, params.presence_penalty));
+    if (params.dry_multiplier > 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_dry(
+            vocab,
+            llama_model_n_ctx_train(model),
+            params.dry_multiplier,
+            params.dry_base,
+            params.dry_allowed_length,
+            params.dry_penalty_last_n,
+            dry_breakers.data(),
+            dry_breakers.size()));
+    }
+    if (params.top_n_sigma >= 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_n_sigma(params.top_n_sigma));
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.top_k));
+    if (params.typical_p < 1.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_typical(params.typical_p, params.min_keep));
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.top_p, params.min_keep));
+    if (params.min_p > 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_min_p(params.min_p, params.min_keep));
+    }
+    if (params.xtc_probability > 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_xtc(params.xtc_probability, params.xtc_threshold, params.min_keep, params.seed));
+    }
+
+    if (params.mirostat == 1) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(params.temperature));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat(llama_vocab_n_tokens(vocab), params.seed, params.mirostat_tau, params.mirostat_eta, 100));
+    } else if (params.mirostat == 2) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(params.temperature));
+        llama_sampler_chain_add(smpl, llama_sampler_init_mirostat_v2(params.seed, params.mirostat_tau, params.mirostat_eta));
+    } else {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp_ext(params.temperature, params.dynatemp_range, params.dynatemp_exponent));
+        if (params.adaptive_p_target >= 0.0f && params.adaptive_p_target <= 1.0f) {
+            llama_sampler_chain_add(smpl, llama_sampler_init_adaptive_p(params.adaptive_p_target, params.adaptive_p_decay, params.seed));
+        } else {
+            llama_sampler_chain_add(smpl, llama_sampler_init_dist(params.seed));
+        }
+    }
     return smpl;
 }
 
@@ -245,11 +326,38 @@ static void native_log_callback(enum ggml_log_level level, const char * text, vo
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 
 static SamplerParams to_sampler_params(const hilum_gen_params & p) {
-    return SamplerParams{
-        p.top_k, p.top_p, p.temperature,
-        p.repeat_penalty, p.frequency_penalty, p.presence_penalty,
-        p.seed
-    };
+    SamplerParams result;
+    result.top_k = p.top_k;
+    result.top_p = p.top_p;
+    result.temperature = p.temperature;
+    result.repeat_penalty = p.repeat_penalty;
+    result.frequency_penalty = p.frequency_penalty;
+    result.presence_penalty = p.presence_penalty;
+    result.seed = p.seed;
+    result.min_keep = p.min_keep;
+    result.min_p = p.min_p;
+    result.typical_p = p.typical_p;
+    result.top_n_sigma = p.top_n_sigma;
+    result.xtc_probability = p.xtc_probability;
+    result.xtc_threshold = p.xtc_threshold;
+    result.dry_multiplier = p.dry_multiplier;
+    result.dry_base = p.dry_base;
+    result.dry_allowed_length = p.dry_allowed_length;
+    result.dry_penalty_last_n = p.dry_penalty_last_n;
+    result.adaptive_p_target = p.adaptive_p_target;
+    result.adaptive_p_decay = p.adaptive_p_decay;
+    result.mirostat = p.mirostat;
+    result.mirostat_tau = p.mirostat_tau;
+    result.mirostat_eta = p.mirostat_eta;
+    result.dynatemp_range = p.dynatemp_range;
+    result.dynatemp_exponent = p.dynatemp_exponent;
+    result.grammar_lazy = p.grammar_lazy;
+    if (p.dry_sequence_breakers && p.n_dry_sequence_breakers > 0) {
+        result.dry_sequence_breakers.assign(
+            p.dry_sequence_breakers,
+            p.dry_sequence_breakers + p.n_dry_sequence_breakers);
+    }
+    return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -404,7 +512,13 @@ HILUM_API hilum_error hilum_context_create(
     if (params.flash_attn)    lp.flash_attn_type = static_cast<llama_flash_attn_type>(params.flash_attn);
     if (params.type_k >= 0)   lp.type_k    = static_cast<ggml_type>(params.type_k);
     if (params.type_v >= 0)   lp.type_v    = static_cast<ggml_type>(params.type_v);
-    if (params.n_seq_max > 0) lp.n_seq_max = params.n_seq_max;
+    if (params.n_seq_max > 0) {
+        lp.n_seq_max = params.n_seq_max;
+    } else if (params.n_batch > 1) {
+        // Keep the default single-sequence behavior when batching is not requested,
+        // but allow batched and multimodal decode paths to allocate enough slots.
+        lp.n_seq_max = params.n_batch;
+    }
 
     llama_context * llm = llama_init_from_model(model->llm, lp);
     if (!llm) {
@@ -558,7 +672,82 @@ HILUM_API hilum_gen_params hilum_gen_default_params(void) {
     p.progress_user_data = nullptr;
     p.stop_sequences     = nullptr;
     p.n_stop_sequences   = 0;
+    p.min_keep           = 0;
+    p.min_p              = 0.0f;
+    p.typical_p          = 1.0f;
+    p.top_n_sigma        = -1.0f;
+    p.xtc_probability    = 0.0f;
+    p.xtc_threshold      = 0.1f;
+    p.dry_multiplier     = 0.0f;
+    p.dry_base           = 1.75f;
+    p.dry_allowed_length = 2;
+    p.dry_penalty_last_n = -1;
+    p.dry_sequence_breakers = nullptr;
+    p.n_dry_sequence_breakers = 0;
+    p.adaptive_p_target  = -1.0f;
+    p.adaptive_p_decay   = 0.9f;
+    p.mirostat           = 0;
+    p.mirostat_tau       = 5.0f;
+    p.mirostat_eta       = 0.1f;
+    p.dynatemp_range     = 0.0f;
+    p.dynatemp_exponent  = 1.0f;
+    p.grammar_lazy       = false;
     return p;
+}
+
+HILUM_API hilum_fit_status hilum_fit_params(
+    const char * model_path,
+    hilum_model_params * model_params,
+    hilum_context_params * context_params,
+    uint32_t n_ctx_min)
+{
+    if (!model_path || !model_params || !context_params) {
+        set_error("hilum_fit_params: model_path, model_params, or context_params is NULL");
+        return HILUM_FIT_ERROR;
+    }
+
+    ensure_backend();
+
+    llama_model_params mparams = llama_model_default_params();
+    if (model_params->n_gpu_layers >= 0) {
+        mparams.n_gpu_layers = model_params->n_gpu_layers;
+    }
+    mparams.use_mmap = model_params->use_mmap;
+
+    llama_context_params cparams = llama_context_default_params();
+    if (context_params->n_ctx > 0)     cparams.n_ctx = context_params->n_ctx;
+    if (context_params->n_batch > 0)   cparams.n_batch = context_params->n_batch;
+    if (context_params->n_threads > 0) cparams.n_threads = static_cast<int32_t>(context_params->n_threads);
+    if (context_params->flash_attn)    cparams.flash_attn_type = static_cast<llama_flash_attn_type>(context_params->flash_attn);
+    if (context_params->type_k >= 0)   cparams.type_k = static_cast<ggml_type>(context_params->type_k);
+    if (context_params->type_v >= 0)   cparams.type_v = static_cast<ggml_type>(context_params->type_v);
+    if (context_params->n_seq_max > 0) cparams.n_seq_max = context_params->n_seq_max;
+
+    std::vector<float> tensor_split(llama_max_devices(), 0.0f);
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides(llama_max_tensor_buft_overrides());
+    std::vector<size_t> margins(llama_max_devices(), 0);
+
+    const llama_params_fit_status status = llama_params_fit(
+        model_path,
+        &mparams,
+        &cparams,
+        tensor_split.data(),
+        tensor_buft_overrides.data(),
+        margins.data(),
+        n_ctx_min,
+        GGML_LOG_LEVEL_ERROR);
+
+    model_params->n_gpu_layers = mparams.n_gpu_layers;
+    model_params->use_mmap = mparams.use_mmap;
+    context_params->n_ctx = cparams.n_ctx;
+    context_params->n_batch = cparams.n_batch;
+    context_params->n_threads = static_cast<uint32_t>(cparams.n_threads);
+    context_params->flash_attn = static_cast<int32_t>(cparams.flash_attn_type);
+    context_params->type_k = static_cast<int32_t>(cparams.type_k);
+    context_params->type_v = static_cast<int32_t>(cparams.type_v);
+    context_params->n_seq_max = cparams.n_seq_max;
+
+    return static_cast<hilum_fit_status>(status);
 }
 
 /* ── Chunked prompt evaluation ─────────────────────────────────────────────── */
@@ -737,9 +926,7 @@ static hilum_error generate_speculative(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        ctx->model_llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     // Eval prompt on target (all tokens except last)
     int32_t eval_start = (params.n_past > 0 && params.n_past <= n_prompt - 1) ? params.n_past : 0;
@@ -868,9 +1055,7 @@ static hilum_error generate_stream_speculative(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        ctx->model_llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     int32_t eval_start = (params.n_past > 0 && params.n_past <= n_prompt - 1) ? params.n_past : 0;
     {
@@ -1040,9 +1225,7 @@ HILUM_API hilum_error hilum_generate(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        model->llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     // Chunked prompt eval (skip n_past)
     int32_t eval_start = (params.n_past > 0 && params.n_past <= n_prompt) ? params.n_past : 0;
@@ -1135,9 +1318,7 @@ HILUM_API hilum_error hilum_generate_stream(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        model->llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     int32_t eval_start = (params.n_past > 0 && params.n_past <= n_prompt) ? params.n_past : 0;
 
@@ -1297,9 +1478,7 @@ HILUM_API hilum_error hilum_generate_vision(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        model->llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     llama_token eos = llama_vocab_eos(vocab);
     std::string result;
@@ -1347,9 +1526,7 @@ HILUM_API hilum_error hilum_generate_vision_stream(
 
     SamplerParams sp = to_sampler_params(params);
     llama_sampler * smpl = create_sampler(
-        vocab, sp.top_k, sp.top_p, sp.temperature,
-        sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-        sp.seed, grammar_str, grammar_root, ctx->llm);
+        model->llm, vocab, sp, grammar_str, grammar_root, ctx->llm);
 
     llama_token eos = llama_vocab_eos(vocab);
 
@@ -1389,6 +1566,7 @@ HILUM_API hilum_error hilum_emb_context_create(
     if (params.n_batch > 0)   lp.n_batch   = params.n_batch;
     if (params.n_threads > 0) lp.n_threads = static_cast<int32_t>(params.n_threads);
     if (params.pooling_type >= 0) lp.pooling_type = static_cast<enum llama_pooling_type>(params.pooling_type);
+    lp.n_seq_max = params.n_batch > 1 ? params.n_batch : 1;
 
     llama_context * llm = llama_init_from_model(model->llm, lp);
     if (!llm) return HILUM_ERR_CONTEXT_FAILED;
@@ -1547,11 +1725,10 @@ HILUM_API hilum_error hilum_generate_batch(
 
     // 2. Create one sampler per sequence
     std::vector<llama_sampler *> samplers(n_prompts);
+    const SamplerParams batch_sampler_params = to_sampler_params(params);
     for (int32_t i = 0; i < n_prompts; i++) {
         samplers[i] = create_sampler(
-            vocab, params.top_k, params.top_p, params.temperature,
-            params.repeat_penalty, params.frequency_penalty, params.presence_penalty,
-            params.seed, grammar_str, grammar_root, nullptr);
+            model->llm, vocab, batch_sampler_params, grammar_str, grammar_root, nullptr);
     }
 
     // 3. Clear KV cache
@@ -1937,9 +2114,7 @@ HILUM_API hilum_error hilum_benchmark(
         sp.seed = 42;
 
         llama_sampler * smpl = create_sampler(
-            vocab, sp.top_k, sp.top_p, sp.temperature,
-            sp.repeat_penalty, sp.frequency_penalty, sp.presence_penalty,
-            sp.seed, "", "", ctx->llm);
+            model->llm, vocab, sp, "", "", ctx->llm);
 
         for (int32_t i = 0; i < n_gen; i++) {
             llama_token token = llama_sampler_sample(smpl, ctx->llm, -1);

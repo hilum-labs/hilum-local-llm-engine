@@ -17,7 +17,7 @@ if (NOT EXISTS "${Vulkan_INCLUDE_DIRS}/vulkan/vulkan.hpp")
     FetchContent_Declare(
         VulkanHeaders
         URL      https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.275.tar.gz
-        # URL_HASH to be pinned after verifying the archive checksum
+        URL_HASH SHA256=7161da645dbd33fd4ea61eec08e0d77389a640010acbf4afc00234f84df9b314
     )
     # Use Populate (not MakeAvailable) — we only need the headers, not the
     # Vulkan-Headers CMake targets which fail under Android cross-compilation.

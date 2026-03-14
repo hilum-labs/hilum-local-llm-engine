@@ -8,6 +8,11 @@
 
 set(TARGET hilum)
 
+set(HILUM_MTMD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tools/mtmd")
+if (NOT EXISTS "${HILUM_MTMD_SOURCE_DIR}/CMakeLists.txt")
+    set(HILUM_MTMD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../mtmd")
+endif()
+
 add_library(${TARGET} STATIC
     hilum_llm.cpp
     hilum_llm.h
@@ -23,7 +28,7 @@ target_include_directories(${TARGET} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../common
     ${CMAKE_CURRENT_SOURCE_DIR}/../vendor
-    ${CMAKE_CURRENT_SOURCE_DIR}/../mtmd
+    ${HILUM_MTMD_SOURCE_DIR}
 )
 
 target_compile_features(${TARGET} PUBLIC cxx_std_17)
@@ -35,13 +40,15 @@ endif()
 
 find_package(Threads REQUIRED)
 
-# Ensure mtmd target exists (consumers may have already added it)
-if (NOT TARGET mtmd)
+# Ensure mtmd target exists for standalone libhilum consumers.
+# When the normal tools build is enabled, top-level CMake adds tools/ later and
+# defines mtmd there, so avoid creating a duplicate target here.
+if (NOT TARGET mtmd AND NOT (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS))
     if(NOT DEFINED LLAMA_INSTALL_VERSION)
         set(LLAMA_INSTALL_VERSION "0.0.0")
     endif()
     add_subdirectory(
-        ${CMAKE_CURRENT_SOURCE_DIR}/../mtmd
+        ${HILUM_MTMD_SOURCE_DIR}
         ${CMAKE_CURRENT_BINARY_DIR}/mtmd
         EXCLUDE_FROM_ALL
     )

@@ -257,6 +257,22 @@ set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 
+if (TARGET hilum)
+    llama_build_and_test(test-hilum-api.cpp LABEL "hilum")
+    target_link_libraries(test-hilum-api PRIVATE hilum)
+
+    llama_build_and_test(test-hilum-runtime.cpp NAME test-hilum-runtime LABEL "hilum" ARGS "${MODEL_DEST}")
+    target_link_libraries(test-hilum-runtime PRIVATE hilum)
+    set_tests_properties(test-hilum-runtime PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+    set(HILUM_LOCAL_LLM_CHAT_MODEL
+        "${PROJECT_SOURCE_DIR}/../local-llm/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf")
+    if (EXISTS "${HILUM_LOCAL_LLM_CHAT_MODEL}")
+        target_compile_definitions(test-hilum-runtime
+            PRIVATE HILUM_TEST_CHAT_MODEL_PATH="${HILUM_LOCAL_LLM_CHAT_MODEL}")
+    endif()
+endif()
+
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)

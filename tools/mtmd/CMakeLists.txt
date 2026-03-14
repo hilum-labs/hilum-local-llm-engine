@@ -2,6 +2,11 @@
 
 find_package(Threads REQUIRED)
 
+set(MTMD_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../vendor")
+if (NOT EXISTS "${MTMD_VENDOR_DIR}/miniaudio/miniaudio.h")
+    set(MTMD_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor")
+endif()
+
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
@@ -44,7 +49,7 @@ target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
-target_include_directories(mtmd PRIVATE ../../vendor)
+target_include_directories(mtmd PRIVATE ${MTMD_VENDOR_DIR})
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
@@ -83,16 +88,20 @@ if (TARGET mtmd)
     endif()
 endif()
 
-add_executable(llama-llava-cli    deprecation-warning.cpp)
-add_executable(llama-gemma3-cli   deprecation-warning.cpp)
-add_executable(llama-minicpmv-cli deprecation-warning.cpp)
-add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
+if (LLAMA_BUILD_TOOLS AND TARGET common)
+    add_executable(llama-llava-cli    deprecation-warning.cpp)
+    add_executable(llama-gemma3-cli   deprecation-warning.cpp)
+    add_executable(llama-minicpmv-cli deprecation-warning.cpp)
+    add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
 
-set(TARGET llama-mtmd-cli)
-add_executable         (${TARGET} mtmd-cli.cpp)
-set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
-if(LLAMA_TOOLS_INSTALL)
-    install(TARGETS ${TARGET} RUNTIME)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mtmd-cli.cpp")
+        set(TARGET llama-mtmd-cli)
+        add_executable         (${TARGET} mtmd-cli.cpp)
+        set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
+        if(LLAMA_TOOLS_INSTALL)
+            install(TARGETS ${TARGET} RUNTIME)
+        endif()
+        target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
+        target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    endif()
 endif()
-target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
-target_compile_features(${TARGET} PRIVATE cxx_std_17)
