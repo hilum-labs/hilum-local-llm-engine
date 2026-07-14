@@ -38,14 +38,16 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#ifdef _WIN32
-#  ifdef HILUM_BUILD
+#if defined(_WIN32) && defined(HILUM_SHARED)
+#  if defined(HILUM_BUILD)
 #    define HILUM_API __declspec(dllexport)
 #  else
 #    define HILUM_API __declspec(dllimport)
 #  endif
-#else
+#elif !defined(_WIN32)
 #  define HILUM_API __attribute__((visibility("default")))
+#else
+#  define HILUM_API
 #endif
 
 #ifdef __cplusplus
