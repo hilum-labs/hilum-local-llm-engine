@@ -313,14 +313,25 @@ static void evict_sampler_cache(llama_context * ctx) {
 
 /* ── Logging ───────────────────────────────────────────────────────────────── */
 
+static std::mutex         g_log_mutex;
+static std::mutex         g_log_set_mutex;
 static hilum_log_callback g_log_cb = nullptr;
 static void *             g_log_ud = nullptr;
 static std::atomic<int>   g_log_min_level{0};
 
 static void native_log_callback(enum ggml_log_level level, const char * text, void * /*ud*/) {
-    if (!g_log_cb) return;
     if (static_cast<int>(level) < g_log_min_level.load(std::memory_order_relaxed)) return;
-    g_log_cb(static_cast<hilum_log_level>(level), text, g_log_ud);
+
+    hilum_log_callback callback;
+    void * user_data;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        callback = g_log_cb;
+        user_data = g_log_ud;
+    }
+    if (callback) {
+        callback(static_cast<hilum_log_level>(level), text, user_data);
+    }
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
@@ -391,8 +402,15 @@ HILUM_API const char * hilum_backend_info(void) {
     return llama_print_system_info();
 }
 
+#define HILUM_STRINGIFY_INNER(value) #value
+#define HILUM_STRINGIFY(value) HILUM_STRINGIFY_INNER(value)
+
 HILUM_API const char * hilum_backend_version(void) {
-    return "hilum-llm v1.0.0 (hilum-local-llm-engine)";
+    return "hilum-llm v"
+        HILUM_STRINGIFY(HILUM_API_VERSION_MAJOR) "."
+        HILUM_STRINGIFY(HILUM_API_VERSION_MINOR) "."
+        HILUM_STRINGIFY(HILUM_API_VERSION_PATCH)
+        " (hilum-local-llm-engine)";
 }
 
 HILUM_API uint32_t hilum_api_version(void) {
@@ -1725,6 +1743,7 @@ HILUM_API hilum_error hilum_generate_batch(
 
     // 2. Create one sampler per sequence
     std::vector<llama_sampler *> samplers(n_prompts);
+    std::vector<llama_token> first_tokens(n_prompts, LLAMA_TOKEN_NULL);
     const SamplerParams batch_sampler_params = to_sampler_params(params);
     for (int32_t i = 0; i < n_prompts; i++) {
         samplers[i] = create_sampler(
@@ -1754,6 +1773,7 @@ HILUM_API hilum_error hilum_generate_batch(
         for (size_t offset = 0; offset < entries.size(); offset += n_batch_size) {
             size_t chunk_end = std::min(entries.size(), offset + static_cast<size_t>(n_batch_size));
             int32_t chunk_size = static_cast<int32_t>(chunk_end - offset);
+            std::vector<std::pair<int32_t, int32_t>> logit_entries;
 
             llama_batch batch = llama_batch_init(chunk_size, 0, n_prompts);
             for (int32_t i = 0; i < chunk_size; i++) {
@@ -1763,24 +1783,28 @@ HILUM_API hilum_error hilum_generate_batch(
                 batch.n_seq_id[i]  = 1;
                 batch.seq_id[i][0] = e.seq_id;
 
+                batch.logits[i] = e.logits ? 1 : 0;
                 if (e.logits) {
-                    bool is_last = true;
-                    for (size_t j = offset + i + 1; j < entries.size(); j++) {
-                        if (entries[j].seq_id == e.seq_id) { is_last = false; break; }
-                    }
-                    batch.logits[i] = is_last ? 1 : 0;
-                } else {
-                    batch.logits[i] = 0;
+                    logit_entries.emplace_back(static_cast<int32_t>(e.seq_id), i);
                 }
             }
             batch.n_tokens = chunk_size;
 
             int32_t ret = llama_decode(ctx->llm, batch);
-            llama_batch_free(batch);
             if (ret != 0) {
+                llama_batch_free(batch);
                 for (auto * s : samplers) llama_sampler_free(s);
                 return HILUM_ERR_DECODE_FAILED;
             }
+
+            // llama_decode only retains logits from the most recent call. Sample
+            // every sequence whose terminal prompt token was decoded in this
+            // chunk before a later chunk can replace those output rows.
+            for (const auto & [seq, batch_index] : logit_entries) {
+                first_tokens[seq] = llama_sampler_sample(
+                    samplers[seq], ctx->llm, batch_index);
+            }
+            llama_batch_free(batch);
         }
     }
 
@@ -1791,7 +1815,11 @@ HILUM_API hilum_error hilum_generate_batch(
 
     // First token for each sequence
     for (int32_t s = 0; s < n_prompts; s++) {
-        llama_token token = llama_sampler_sample(samplers[s], ctx->llm, -1);
+        llama_token token = first_tokens[s];
+        if (token == LLAMA_TOKEN_NULL) {
+            for (auto * sampler : samplers) llama_sampler_free(sampler);
+            return HILUM_ERR_DECODE_FAILED;
+        }
         if (token == eos) {
             seq_done[s] = true;
             n_active--;
@@ -1812,6 +1840,11 @@ HILUM_API hilum_error hilum_generate_batch(
             seq_done[s] = true;
             n_active--;
             hilum_batch_event done_ev{s, nullptr, 0, true, "cancelled"};
+            callback(done_ev, user_data);
+        } else if (seq_generated[s] >= params.max_tokens) {
+            seq_done[s] = true;
+            n_active--;
+            hilum_batch_event done_ev{s, nullptr, 0, true, "length"};
             callback(done_ev, user_data);
         }
     }
@@ -1839,7 +1872,10 @@ HILUM_API hilum_error hilum_generate_batch(
 
         int32_t ret = llama_decode(ctx->llm, batch);
         llama_batch_free(batch);
-        if (ret != 0) break;
+        if (ret != 0) {
+            for (auto * sampler : samplers) llama_sampler_free(sampler);
+            return HILUM_ERR_DECODE_FAILED;
+        }
 
         for (int32_t i = 0; i < batch_count; i++) {
             int32_t s = active_seqs[i];
@@ -1939,14 +1975,13 @@ HILUM_API hilum_error hilum_quantize(
 /* ── Logging ───────────────────────────────────────────────────────────────── */
 
 HILUM_API void hilum_log_set(hilum_log_callback callback, void * user_data) {
-    if (g_log_cb) {
-        llama_log_set(nullptr, nullptr);
+    std::lock_guard<std::mutex> set_lock(g_log_set_mutex);
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        g_log_cb = callback;
+        g_log_ud = user_data;
     }
-    g_log_cb = callback;
-    g_log_ud = user_data;
-    if (callback) {
-        llama_log_set(native_log_callback, nullptr);
-    }
+    llama_log_set(callback ? native_log_callback : nullptr, nullptr);
 }
 
 HILUM_API void hilum_log_set_level(hilum_log_level min_level) {

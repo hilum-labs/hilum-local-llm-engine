@@ -233,6 +233,131 @@ void test_sync_generation(testing & t) {
     hilum_model_free(model);
 }
 
+struct batch_first_token_capture {
+    std::vector<std::string> first_tokens;
+};
+
+struct batch_completion_capture {
+    std::vector<int32_t> token_counts;
+    std::vector<std::string> finish_reasons;
+};
+
+bool collect_batch_first_token(hilum_batch_event event, void * user_data) {
+    auto * capture = static_cast<batch_first_token_capture *>(user_data);
+    if (!event.done && event.seq_index >= 0 &&
+        event.seq_index < static_cast<int32_t>(capture->first_tokens.size())) {
+        capture->first_tokens[static_cast<size_t>(event.seq_index)].assign(
+            event.token ? event.token : "",
+            event.token_len > 0 ? static_cast<size_t>(event.token_len) : 0);
+        return false;
+    }
+    return true;
+}
+
+bool collect_batch_completion(hilum_batch_event event, void * user_data) {
+    auto * capture = static_cast<batch_completion_capture *>(user_data);
+    if (event.seq_index < 0 ||
+        event.seq_index >= static_cast<int32_t>(capture->token_counts.size())) {
+        return false;
+    }
+
+    const size_t seq = static_cast<size_t>(event.seq_index);
+    if (event.done) {
+        capture->finish_reasons[seq] = event.finish_reason ? event.finish_reason : "";
+    } else {
+        capture->token_counts[seq]++;
+    }
+    return true;
+}
+
+std::string generate_first_token(
+    hilum_model * model,
+    hilum_context * ctx,
+    const char * prompt,
+    hilum_gen_params params)
+{
+    params.max_tokens = 1;
+    std::vector<char> buf(128, '\0');
+    int32_t generated = 0;
+    if (hilum_generate(
+            model, ctx, prompt, params,
+            buf.data(), static_cast<int32_t>(buf.size()), &generated) != HILUM_OK ||
+        generated != 1) {
+        return "";
+    }
+    return std::string(buf.data());
+}
+
+void test_batch_first_token_routing(testing & t) {
+    hilum_model * model = nullptr;
+    hilum_context * ctx = nullptr;
+
+    t.assert_true("model loads", load_model(g_cfg.model_path, &model));
+    t.assert_true("batch context creates", model != nullptr && create_context(model, &ctx, 256, 64));
+    if (!model || !ctx) {
+        hilum_context_free(ctx);
+        hilum_model_free(model);
+        return;
+    }
+
+    hilum_gen_params params = hilum_gen_default_params();
+    params.max_tokens = 1;
+    params.temperature = 0.0f;
+    params.top_k = 1;
+    params.top_p = 1.0f;
+    params.seed = 1234;
+
+    const std::vector<const char *> candidates = {
+        "Once upon a time",
+        "The quick brown fox",
+        "She opened the door and",
+        "In the dark forest",
+        "The little robot said",
+    };
+
+    std::vector<std::string> expected(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        expected[i] = generate_first_token(model, ctx, candidates[i], params);
+    }
+
+    size_t first = 0;
+    size_t second = candidates.size();
+    for (size_t i = 1; i < candidates.size(); ++i) {
+        if (!expected[first].empty() && !expected[i].empty() && expected[first] != expected[i]) {
+            second = i;
+            break;
+        }
+    }
+
+    t.assert_true("fixture provides prompts with distinct first tokens", second < candidates.size());
+    if (second >= candidates.size()) {
+        hilum_context_free(ctx);
+        hilum_model_free(model);
+        return;
+    }
+
+    const char * prompts[] = { candidates[first], candidates[second] };
+    batch_first_token_capture capture{{"", ""}};
+    const hilum_error err = hilum_generate_batch(
+        model, ctx, prompts, 2, params, collect_batch_first_token, &capture);
+
+    t.assert_equal("batch generation succeeds", HILUM_OK, err);
+    t.assert_equal("batch sequence 0 samples its own logits", expected[first], capture.first_tokens[0]);
+    t.assert_equal("batch sequence 1 samples its own logits", expected[second], capture.first_tokens[1]);
+
+    batch_completion_capture completion{{0, 0}, {"", ""}};
+    const hilum_error completion_err = hilum_generate_batch(
+        model, ctx, prompts, 2, params, collect_batch_completion, &completion);
+    t.assert_equal("one-token batch generation succeeds", HILUM_OK, completion_err);
+    t.assert_equal("batch sequence 0 respects max_tokens", 1, completion.token_counts[0]);
+    t.assert_equal("batch sequence 1 respects max_tokens", 1, completion.token_counts[1]);
+    t.assert_equal("batch sequence 0 reports length", std::string("length"), completion.finish_reasons[0]);
+    t.assert_equal("batch sequence 1 reports length", std::string("length"), completion.finish_reasons[1]);
+
+    hilum_context_free(ctx);
+    hilum_model_free(model);
+}
+
 void test_extended_sampling_and_fit_helper(testing & t) {
     hilum_model_params fit_model = hilum_model_default_params();
     fit_model.n_gpu_layers = 0;
@@ -679,6 +804,7 @@ int main(int argc, char ** argv) {
     t.test("tokenize and detokenize", test_tokenize_and_detokenize);
     t.test("chat template", test_chat_template);
     t.test("sync generation", test_sync_generation);
+    t.test("batch first-token routing", test_batch_first_token_routing);
     t.test("extended sampling and fit helper", test_extended_sampling_and_fit_helper);
     t.test("streaming generation and cancellation", test_streaming_generation_and_cancellation);
     t.test("prompt progress cancellation", test_prompt_progress_cancellation);
